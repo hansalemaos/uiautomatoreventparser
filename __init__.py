@@ -3,12 +3,17 @@ import re
 from ast import literal_eval
 from datetime import datetime
 import time
+import sys
 from adbshellexecuter import UniversalADBExecutor
 from mymulti_key_dict import MultiKeyDict
 from functools import cache
+from exceptdrucker import errwrite
 
 date_format = "%m-%d %H:%M:%S.%f"
 this_year = datetime.now().year
+
+mcfg = sys.modules[__name__]
+mcfg.debug_mode = False
 
 
 class Trie:
@@ -189,11 +194,21 @@ def generate_trie_regex(all_categories_eventparser):
 
 
 def parse_timestamp(date_str):
-    return float(
-        datetime.strptime(date_str.decode(), date_format)
-        .replace(year=this_year)
-        .timestamp()
-    )
+    try:
+        if not date_str.strip():
+            return time.time()
+    except Exception:
+        pass
+    try:
+        return float(
+            datetime.strptime(date_str.decode(), date_format)
+            .replace(year=this_year)
+            .timestamp()
+        )
+    except Exception:
+        if mcfg.debug_mode:
+            errwrite()
+        return time.time()
 
 
 @cache
@@ -201,7 +216,10 @@ def literal_eval_cached(value):
     try:
         return literal_eval(value)
     except Exception:
-        return value.decode("utf-8", "backslashreplace")
+        try:
+            return value.decode("utf-8", "backslashreplace")
+        except Exception:
+            return str(value)
 
 
 def convert_function(key, value):
@@ -214,7 +232,12 @@ def convert_function(key, value):
         or key == "ContentDescription"
         or key == "ParcelableData"
     ):
-        return value.decode("utf-8", "backslashreplace")
+        try:
+            return value.decode("utf-8", "backslashreplace")
+        except Exception:
+            return str(value)
+            if mcfg.debug_mode:
+                errwrite()
     if value == b"false":
         return False
     if value == b"true":
@@ -363,7 +386,7 @@ class UiautomatorEventParser(UniversalADBExecutor):
         kill_uiautomator_cmd = kill_uiautomator_cmd or self.kill_uiautomator_cmd
         if print_exceptions is None:
             print_exceptions = self.print_exceptions
-
+        mcfg.debug_mode = print_exceptions
         nonblocking_subprocess = self.create_non_blocking_proc(
             debug=False,
             ignore_exceptions=True,
@@ -390,6 +413,10 @@ class UiautomatorEventParser(UniversalADBExecutor):
                         current_line_as_bytes = (
                             nonblocking_subprocess.stdout_results.pop()
                         )
+                        if current_line_as_bytes.lstrip().startswith(b";"):
+                            continue
+                        if mcfg.debug_mode:
+                            print(f"{current_line_as_bytes=}")
                         current_line_bytes_split = self.compiled_regex_categories.split(
                             b"; TimeStamp: "
                             + current_line_as_bytes[:18]
@@ -401,57 +428,69 @@ class UiautomatorEventParser(UniversalADBExecutor):
                         for current_index_of_splitline in range(
                             len_of_current_line_bytes_split
                         ):
-                            if current_index_of_splitline % 2 == 0:
-                                if (
-                                    len_of_current_line_bytes_split
-                                    > current_index_of_splitline + 1
-                                ):
-                                    tmpfi = current_line_bytes_split[
-                                        current_index_of_splitline + 1
-                                    ].strip(b"[] ")
-                                    parsed_lines_so_far[current_line][
-                                        self.all_categories_eventparser_as_unicode[
-                                            current_line_bytes_split[
-                                                current_index_of_splitline
-                                            ]
-                                        ]
-                                    ] = cachedict.setdefault(
-                                        tmpfi,
-                                        convert_function(
+                            try:
+                                if current_index_of_splitline % 2 == 0:
+                                    if (
+                                        len_of_current_line_bytes_split
+                                        > current_index_of_splitline + 1
+                                    ):
+                                        tmpfi = current_line_bytes_split[
+                                            current_index_of_splitline + 1
+                                        ].strip(b"[] ")
+                                        parsed_lines_so_far[current_line][
                                             self.all_categories_eventparser_as_unicode[
                                                 current_line_bytes_split[
                                                     current_index_of_splitline
                                                 ]
-                                            ],
+                                            ]
+                                        ] = cachedict.setdefault(
                                             tmpfi,
-                                        ),
-                                    )
+                                            convert_function(
+                                                self.all_categories_eventparser_as_unicode[
+                                                    current_line_bytes_split[
+                                                        current_index_of_splitline
+                                                    ]
+                                                ],
+                                                tmpfi,
+                                            ),
+                                        )
+                            except Exception:
+                                if mcfg.debug_mode:
+                                    errwrite()
                         for missing_categories in self.all_categories_eventparser_list:
-                            if (
-                                missing_categories
-                                not in parsed_lines_so_far[current_line]
-                            ):
-                                parsed_lines_so_far[current_line][
+                            try:
+                                if (
                                     missing_categories
-                                ] = ""
-                        continue_execution = func(**locals())
+                                    not in parsed_lines_so_far[current_line]
+                                ):
+                                    parsed_lines_so_far[current_line][
+                                        missing_categories
+                                    ] = ""
+                            except Exception:
+                                if mcfg.debug_mode:
+                                    errwrite()
+                        try:
+                            continue_execution = func(**locals())
+                        except Exception:
+                            if mcfg.debug_mode:
+                                errwrite()
                         if not continue_execution:
                             return parsed_lines_so_far
                         current_line += 1
                     except Exception as e:
-                        if print_exceptions:
-                            print(e)
+                        if mcfg.debug_mode:
+                            errwrite()
                     except KeyboardInterrupt:
                         return parsed_lines_so_far
             except Exception as e:
-                if print_exceptions:
-                    print(e)
+                if mcfg.debug_mode:
+                    errwrite()
             except KeyboardInterrupt:
                 return parsed_lines_so_far
         try:
             nonblocking_subprocess.stdinwrite(kill_uiautomator_and_process_cmd)
             nonblocking_subprocess.kill()
         except Exception as e:
-            if print_exceptions:
-                print(e)
+            if mcfg.debug_mode:
+                errwrite()
         return parsed_lines_so_far
